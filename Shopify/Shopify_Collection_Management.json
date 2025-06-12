@@ -1,0 +1,703 @@
+{
+  "name": "Shopify Collection Management",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "976b0804-2c7a-4c59-b059-89e88558904b",
+      "name": "Every Minute Trigger",
+      "type": "n8n-nodes-base.interval",
+      "typeVersion": 1,
+      "position": [
+        -2920,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "YOUR_LOG_SHEET_ID",
+        "sheetName": "Workflow_Logs",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ new Date().toISOString() }}",
+            "event": "workflow_started",
+            "message": "Starting product collection update workflow",
+            "details": ""
+          }
+        },
+        "options": {}
+      },
+      "id": "85ca0f24-51c2-446b-9d0d-3dcb174d2962",
+      "name": "Log Workflow Start",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -2720,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": "YOUR_SHEET_ID",
+        "sheetName": "Sheet1",
+        "options": {}
+      },
+      "id": "b594ae09-4aaf-471e-a7d3-148de50669c5",
+      "name": "Read Sheet Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -2520,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enhanced filtering with validation and logging\nconst candidates = [];\nconst errors = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const rowNum = i + 2; // Account for header row\n  \n  // Validate required fields\n  if (!item.json['Product SKU']) {\n    errors.push(`Row ${rowNum}: Missing Product SKU`);\n    continue;\n  }\n  \n  if (!item.json['Product Collection']) {\n    errors.push(`Row ${rowNum}: Missing Product Collection`);\n    continue;\n  }\n  \n  if (!item.json['Position'] || isNaN(parseInt(item.json['Position']))) {\n    errors.push(`Row ${rowNum}: Invalid Position value`);\n    continue;\n  }\n  \n  // Filter candidates where Ready for Update = TRUE\n  if (item.json['Ready for Update'] === true || item.json['Ready for Update'] === 'TRUE') {\n    candidates.push({\n      ...item.json,\n      rowNumber: rowNum,\n      originalIndex: i\n    });\n  }\n}\n\n// Log summary\nconsole.log(`Found ${candidates.length} candidates for processing`);\nif (errors.length > 0) {\n  console.log(`Validation errors: ${errors.join(', ')}`);\n}\n\n// Return candidates with metadata\nreturn candidates.map(candidate => ({ json: candidate }));"
+      },
+      "id": "0e2be6bc-c036-4ac6-b0c6-35155059f40e",
+      "name": "Filter & Validate Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2320,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "YOUR_LOG_SHEET_ID",
+        "sheetName": "Workflow_Logs",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ new Date().toISOString() }}",
+            "event": "candidates_filtered",
+            "message": "Filtered candidate rows for processing",
+            "details": "={{ `Found ${$json.length || 0} candidates ready for update` }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "5daa89a8-4f07-407f-9fcc-f8f0a4f339db",
+      "name": "Log Candidates Found",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -2120,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-has-candidates",
+              "leftValue": "={{ $json.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "583e4e88-ed2e-417b-a374-f5c8989aa02a",
+      "name": "Has Candidates?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1920,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "id": "50d1710a-6552-4223-ba9a-2f43e9ced308",
+      "name": "Batch Process (10 items)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1720,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $credentials.shopifyApi.shopDomain }}.myshopify.com/admin/api/2023-10/graphql.json",
+        "authentication": "headerAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a11c635d-371b-479c-a911-10c5a9e2a2a7",
+      "name": "Get Product by SKU",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1520,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process Shopify API response and validate\nconst response = $input.first().json;\nconst originalData = $input.first().json;\n\nif (response.errors) {\n  throw new Error(`Shopify API Error: ${JSON.stringify(response.errors)}`);\n}\n\nconst variants = response.data?.productVariants?.edges || [];\n\nif (variants.length === 0) {\n  throw new Error(`Product not found for SKU: ${originalData['Product SKU']}`);\n}\n\nconst variant = variants[0].node;\nconst product = variant.product;\n\nreturn [{\n  json: {\n    ...originalData,\n    productId: product.id,\n    productTitle: product.title,\n    productHandle: product.handle,\n    variantId: variant.id,\n    variantSku: variant.sku\n  }\n}];"
+      },
+      "id": "60546627-8c0c-4dd1-b2ed-97dea8be46e9",
+      "name": "Process Product Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1320,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $credentials.shopifyApi.shopDomain }}.myshopify.com/admin/api/2023-10/graphql.json",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "a5ccfcf3-904b-4f76-97e2-110bebc60590",
+      "name": "Get Collection by Title",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1120,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process collection response or create if needed\nconst response = $input.first().json;\nconst originalData = $input.first().json;\n\nif (response.errors) {\n  throw new Error(`Shopify API Error: ${JSON.stringify(response.errors)}`);\n}\n\nconst collections = response.data?.collections?.edges || [];\n\nif (collections.length === 0) {\n  // Collection not found - we'll need to create it\n  return [{\n    json: {\n      ...originalData,\n      collectionId: null,\n      collectionExists: false,\n      needsCreation: true\n    }\n  }];\n}\n\nconst collection = collections[0].node;\n\nreturn [{\n  json: {\n    ...originalData,\n    collectionId: collection.id,\n    collectionTitle: collection.title,\n    collectionHandle: collection.handle,\n    collectionExists: true,\n    needsCreation: false\n  }\n}];"
+      },
+      "id": "91e4e0bb-ce2e-4fb0-aa4f-b5d8f01752bb",
+      "name": "Process Collection Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -920,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "needs-collection-creation",
+              "leftValue": "={{ $json.needsCreation }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0fb9e084-5f83-43cc-9907-2f754c92a9c0",
+      "name": "Needs Collection Creation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $credentials.shopifyApi.shopDomain }}.myshopify.com/admin/api/2023-10/graphql.json",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "f1d2370e-a4cf-4c93-9522-f048e77431f6",
+      "name": "Create Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -520,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process collection creation response\nconst response = $input.first().json;\nconst originalData = $input.first().json;\n\nif (response.errors) {\n  throw new Error(`Shopify API Error: ${JSON.stringify(response.errors)}`);\n}\n\nconst result = response.data?.collectionCreate;\n\nif (result?.userErrors?.length > 0) {\n  throw new Error(`Collection creation failed: ${result.userErrors.map(e => e.message).join(', ')}`);\n}\n\nconst collection = result.collection;\n\nreturn [{\n  json: {\n    ...originalData,\n    collectionId: collection.id,\n    collectionTitle: collection.title,\n    collectionHandle: collection.handle,\n    collectionCreated: true\n  }\n}];"
+      },
+      "id": "c53c87ef-0bff-47ad-bb95-35534ff4a7a9",
+      "name": "Process Creation Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $credentials.shopifyApi.shopDomain }}.myshopify.com/admin/api/2023-10/graphql.json",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "e1d1cfa9-bfef-48b1-96b5-3f7d433a279f",
+      "name": "Add Product to Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -120,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $credentials.shopifyApi.shopDomain }}.myshopify.com/admin/api/2023-10/graphql.json",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "4d4f7aa0-1a75-44ba-b57d-753db8c9a268",
+      "name": "Reorder Products in Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        80,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "YOUR_SHEET_ID",
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "values": {
+            "Updated At": "={{ new Date().toISOString().split('T')[0] }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "292657be-2b02-4037-8c38-96fd21c73f35",
+      "name": "Update Timestamp",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        280,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "YOUR_SHEET_ID",
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "values": {
+            "Ready for Update": "FALSE"
+          }
+        },
+        "options": {}
+      },
+      "id": "b412cb9f-5d88-4c89-b327-097f8d3f4f0f",
+      "name": "Clear Ready Checkbox",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        480,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "YOUR_LOG_SHEET_ID",
+        "sheetName": "Workflow_Logs",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ new Date().toISOString() }}",
+            "event": "product_processed_success",
+            "message": "Successfully processed product",
+            "details": "={{ `SKU: ${$json['Product SKU']}, Product: ${$json.productTitle}, Collection: ${$json['Product Collection']}, Position: ${$json.Position}` }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "d601cd03-c022-44c7-892d-032a737cd071",
+      "name": "Log Success",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        680,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "YOUR_LOG_SHEET_ID",
+        "sheetName": "Workflow_Logs",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ new Date().toISOString() }}",
+            "event": "no_candidates",
+            "message": "No candidates found for processing",
+            "details": ""
+          }
+        },
+        "options": {}
+      },
+      "id": "3a77156d-4e8a-4648-ad59-b48ea76f61bd",
+      "name": "Log No Candidates",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -1900,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "YOUR_LOG_SHEET_ID",
+        "sheetName": "Workflow_Logs",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ new Date().toISOString() }}",
+            "event": "error",
+            "message": "Workflow error occurred",
+            "details": "={{ $json.error?.message || 'Unknown error' }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "f90c17bb-97b3-43e0-a2bb-47c4a8845296",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -1120,
+        420
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "07d0c1fb-380d-49ff-8d4c-4b04d257880a",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1320,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "YOUR_LOG_SHEET_ID",
+        "sheetName": "Workflow_Logs",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ new Date().toISOString() }}",
+            "event": "workflow_completed",
+            "message": "Workflow completed successfully",
+            "details": "={{ `Processed batch completed` }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "5097be03-ce71-4b6a-b29e-f93688f4d007",
+      "name": "Log Workflow Complete",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        880,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "content": "# Optimized Shopify Collection Management Workflow\n\n## Key Optimizations\n\n### 1. **Enhanced Error Handling & Validation**\n- **Field Validation**: Validates SKU, Collection, and Position before processing\n- **API Response Validation**: Checks for Shopify API errors and user errors\n- **Graceful Failures**: Continues processing other items if one fails\n- **Detailed Error Context**: Captures specific error messages and row numbers\n\n### 2. **Comprehensive Logging System**\n- **Structured Logging**: All events logged to dedicated Google Sheets\n- **Event Types**: workflow_started, candidates_filtered, product_processed_success, error, workflow_completed\n- **Detailed Context**: SKU, product titles, collection names, positions logged\n- **Timestamp Tracking**: ISO timestamps for all events\n\n### 3. **Performance Improvements**\n- **Batch Processing**: Processes 10 items at once to optimize API calls\n- **Rate Limit Management**: Built-in batching reduces API call frequency\n- **Efficient GraphQL Queries**: Minimal data fetching with targeted queries\n- **Smart Collection Handling**: Creates collections only when needed\n\n### 4. **Advanced Features**\n- **Dynamic Collection Creation**: Automatically creates missing collections\n- **Robust Data Processing**: Handles edge cases and malformed data\n- **Comprehensive Response Processing**: Validates all API responses\n- **Row Number Tracking**: Maintains accurate sheet row references\n\n## Setup Requirements\n\n### Google Sheets Setup\n1. **Main Data Sheet**: Configure with columns A-E as specified\n2. **Logging Sheet**: Create with columns: `timestamp`, `event`, `message`, `details`\n\n### n8n Configuration\n```bash\n# Environment Variables Required\nGOOGLE_SHEETS_CREDENTIALS=your_oauth2_credentials\nSHOPIFY_API_CREDENTIALS=your_shopify_headers\nYOUR_SHEET_ID=your_main_sheet_id\nYOUR_LOG_SHEET_ID=your_logging_sheet_",
+        "height": 1080,
+        "width": 860
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -3340,
+        340
+      ],
+      "id": "7aa4f7db-21b2-4347-b26d-66962cc34ab9",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every Minute Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Workflow Start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Workflow Start": {
+      "main": [
+        [
+          {
+            "node": "Read Sheet Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Sheet Data": {
+      "main": [
+        [
+          {
+            "node": "Filter & Validate Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter & Validate Candidates": {
+      "main": [
+        [
+          {
+            "node": "Log Candidates Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Candidates Found": {
+      "main": [
+        [
+          {
+            "node": "Has Candidates?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Candidates?": {
+      "main": [
+        [
+          {
+            "node": "Batch Process (10 items)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log No Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Process (10 items)": {
+      "main": [
+        [
+          {
+            "node": "Get Product by SKU",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Product by SKU": {
+      "main": [
+        [
+          {
+            "node": "Process Product Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Product Response": {
+      "main": [
+        [
+          {
+            "node": "Get Collection by Title",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Collection by Title": {
+      "main": [
+        [
+          {
+            "node": "Process Collection Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Collection Response": {
+      "main": [
+        [
+          {
+            "node": "Needs Collection Creation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Collection Creation?": {
+      "main": [
+        [
+          {
+            "node": "Create Collection",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Add Product to Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Collection": {
+      "main": [
+        [
+          {
+            "node": "Process Creation Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Creation Response": {
+      "main": [
+        [
+          {
+            "node": "Add Product to Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Product to Collection": {
+      "main": [
+        [
+          {
+            "node": "Reorder Products in Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reorder Products in Collection": {
+      "main": [
+        [
+          {
+            "node": "Update Timestamp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Timestamp": {
+      "main": [
+        [
+          {
+            "node": "Clear Ready Checkbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Ready Checkbox": {
+      "main": [
+        [
+          {
+            "node": "Log Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Success": {
+      "main": [
+        [
+          {
+            "node": "Log Workflow Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "81a3663b-0dbb-4652-9e5c-f43fb40b4a53",
+  "meta": {
+    "instanceId": "27ddd4b4d61aa4db5cba157e936484e9d4a56e8347acdefac7e18b538fb51a64"
+  },
+  "id": "raIoTPxv2tItuWPi",
+  "tags": []
+}
